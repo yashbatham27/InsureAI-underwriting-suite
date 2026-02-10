@@ -1,0 +1,7 @@
+{
+  "name": "InsureAI Underwriting Suite",
+  "description": "An automated AI-driven life insurance underwriting system that assesses risk, calculates extra mortality points, and determines premiums based on a controlled medical and occupational dataset.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
