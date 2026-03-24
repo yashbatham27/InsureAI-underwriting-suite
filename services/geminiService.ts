@@ -1,6 +1,5 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
-import { ApplicantInfo, Severity } from "../types";
+import { ApplicantInfo } from "../types";
 
 // Always use named parameter for apiKey and rely solely on process.env.API_KEY.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -13,16 +12,29 @@ const EXTRACTION_SCHEMA = {
     gender: { type: Type.STRING },
     occupation: { type: Type.STRING },
     income: { type: Type.NUMBER },
-    smoking: { type: Type.BOOLEAN },
-    alcohol: { type: Type.BOOLEAN },
+    sumAssured: { type: Type.NUMBER },
+    bmi: { type: Type.NUMBER },
+    familyHistory: { type: Type.STRING, description: "e.g., 'Both Surviving > age 65', 'Only one surviving > age 65', 'Both died < age 65'" },
+    habits: {
+      type: Type.ARRAY,
+      description: "List of personal habits like Smoking, Alcoholic drinks, or Tobacco.",
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          type: { type: Type.STRING, description: "e.g., 'Smoking', 'Alcoholic drinks', 'Tobacco'" },
+          level: { type: Type.STRING, description: "Must be exactly one of: 'Occasionally', 'Regular (moderate)', 'Regular (high dose)'" }
+        },
+        required: ["type", "level"]
+      }
+    },
     medicalConditions: {
       type: Type.ARRAY,
       items: {
         type: Type.OBJECT,
         properties: {
           name: { type: Type.STRING },
-          severity: { type: Type.STRING, description: "One of: Mild, Moderate, Severe, Critical" },
-          indicators: { type: Type.STRING, description: "Specific clinical notes, e.g., 'BP 160/90', 'BMI 32', 'HbA1c 8.5%'" }
+          severity: { type: Type.INTEGER, description: "Must be an integer: 1, 2, 3, or 4" },
+          indicators: { type: Type.STRING, description: "Specific clinical notes, e.g., 'BP 160/90', 'HbA1c 8.5%'" }
         },
         required: ["name", "severity"]
       }
@@ -37,7 +49,7 @@ const EXTRACTION_SCHEMA = {
     missingInfo: {
       type: Type.ARRAY,
       items: { type: Type.STRING },
-      description: "List of required fields (name, age, occupation, medical history) that were NOT found in the input."
+      description: "List of required fields (name, age, occupation, income, sum assured, bmi, medical history) that were NOT found in the input."
     }
   }
 };
@@ -76,12 +88,20 @@ function normalizeData(data: any, originalContext: string = ""): { applicant: Ap
   if (!data.name) missing.push("Applicant Name");
   if (!data.age) missing.push("Applicant Age");
   if (!data.occupation) missing.push("Occupation");
+  if (!data.income) missing.push("Income");
+  if (!data.sumAssured) missing.push("Sum Assured");
+  if (!data.bmi) missing.push("BMI");
 
   const applicant = {
     ...data,
+    averageIncome: data.averageIncome || data.income || 0,
+    // Ensure fallbacks for nested objects if AI misses them entirely
+    habits: data.habits || [],
+    familyHistory: data.familyHistory || "Not Disclosed",
     medicalConditions: (data.medicalConditions || []).map((c: any) => ({
       ...c,
-      severity: Object.values(Severity).includes(c.severity as Severity) ? c.severity : Severity.MILD
+      // Enforce numeric severity to match type 1 | 2 | 3 | 4
+      severity: [1, 2, 3, 4].includes(c.severity) ? c.severity : 1 
     }))
   };
 
@@ -100,10 +120,12 @@ export async function extractUnderwritingData(
     2. Medical Report: ${medicalText}
 
     Rules for extraction:
-    - Occupation: Extract the occupation explicitly stated in the text (usually under "Employment" or "Occupation"). You may normalize synonymous terms (e.g., "Software Engineer" -> "IT Professional"), but if the occupation is distinct, extract it exactly as written. DO NOT omit the occupation.
-    - Medical Conditions must include severity.
-    - Map "Level 1" to "Mild", "Level 2" to "Moderate", "Level 3" to "Severe", "Level 4" to "Critical".
-    - Extract specific clinical indicators (e.g., "BP 160/100", "BMI 32", "HbA1c 8%") into the 'indicators' field.
+    - Occupation: Extract exactly as written.
+    - Financials: Extract 'income' and 'sumAssured' as raw numbers without currency symbols.
+    - Biometrics: Extract 'bmi' as a numeric value.
+    - Family History: Extract the exact phrase mapping to either: "Both Surviving > age 65", "Only one surviving > age 65", or "Both died < age 65".
+    - Habits: For any mentioned habits (Smoking, Alcoholic drinks, Tobacco), assign the level strictly as one of: 'Occasionally', 'Regular (moderate)', or 'Regular (high dose)'.
+    - Medical Conditions: Extract severity as an INTEGER (1, 2, 3, or 4). Do NOT use words. For example, 'Severity level 3' becomes 3.
     - IMPORTANT: Even if the text is simple, do not fail. Extract what is there.
   `;
 
@@ -136,9 +158,10 @@ export async function extractUnderwritingDataFromPDF(
     Extract all relevant underwriting variables.
 
     IMPORTANT: 
-    - Verify if "Name", "Age", "Occupation", and "Medical conditions" are all present.
-    - Occupation: Extract the occupation explicitly stated. Do not omit it.
-    - Map "Level 1" to "Mild", "Level 2" to "Moderate", "Level 3" to "Severe", "Level 4" to "Critical".
+    - Verify if "Name", "Age", "Occupation", "Income", "Sum Assured", and "BMI" are present.
+    - Family History: Must match phrasing like "Both Surviving > age 65" or "Both died < age 65".
+    - Habits: Map habit consumption to exactly 'Occasionally', 'Regular (moderate)', or 'Regular (high dose)'.
+    - Medical conditions: Extract severity as a NUMBER (1, 2, 3, or 4). Do not use text descriptions for severity.
     - Extract specific clinical indicators into the 'indicators' field.
   `;
 
@@ -162,8 +185,6 @@ export async function extractUnderwritingDataFromPDF(
       }
     });
 
-    // Note: We cannot easily run regex on PDF content unless we extracted text first. 
-    // We rely on AI for PDF.
     return normalizeData(JSON.parse(cleanJson(response.text)));
   } catch (error: any) {
     if (signal?.aborted || error.name === 'AbortError') {

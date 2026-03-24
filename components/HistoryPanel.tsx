@@ -1,6 +1,5 @@
-
 import React from 'react';
-import { HistoryItem, RiskCategory } from '../types';
+import { HistoryItem } from '../types';
 
 interface HistoryPanelProps {
   history: HistoryItem[];
@@ -10,14 +9,18 @@ interface HistoryPanelProps {
 }
 
 const HistoryPanel: React.FC<HistoryPanelProps> = ({ history, onLoad, onDelete, onClose }) => {
-  const getCategoryColor = (cat: RiskCategory) => {
-    switch(cat) {
-      case RiskCategory.PREFERRED: return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
-      case RiskCategory.STANDARD: return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300';
-      case RiskCategory.SUBSTANDARD: return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
-      case RiskCategory.DECLINE: return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300';
-      default: return 'bg-slate-100 text-slate-700 dark:bg-slate-700 dark:text-slate-300';
+  const getCategoryColor = (cat: string) => {
+    const lowerCat = cat.toLowerCase();
+    if (lowerCat.includes('sub-standard')) {
+      return 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300';
     }
+    if (lowerCat.includes('standard')) {
+      return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300';
+    }
+    if (lowerCat.includes('decline') || lowerCat.includes('refer')) {
+      return 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300';
+    }
+    return 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300';
   };
 
   const formatDate = (ts: number) => {
@@ -65,9 +68,12 @@ const HistoryPanel: React.FC<HistoryPanelProps> = ({ history, onLoad, onDelete, 
                 </span>
               </div>
               
-              <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mt-2">
+              <div className="flex items-center gap-4 text-xs text-slate-500 dark:text-slate-400 mt-2 flex-wrap">
                 <span className="flex items-center gap-1">
                   <i className="fa-solid fa-briefcase opacity-50"></i> {item.applicant.occupation}
+                </span>
+                <span className="flex items-center gap-1">
+                  <i className="fa-solid fa-chart-line opacity-50"></i> {item.report.totalExtraMortalityPoints} EM
                 </span>
                 <span className="flex items-center gap-1">
                   <i className="fa-solid fa-indian-rupee-sign opacity-50"></i> {item.report.finalTotalPremium.toLocaleString('en-IN')}

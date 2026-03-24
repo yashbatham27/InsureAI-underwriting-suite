@@ -1,6 +1,5 @@
-
-import React from 'react';
-import { ApplicantInfo, UnderwritingResult, RiskCategory } from '../types';
+import React, { useState } from 'react';
+import { ApplicantInfo, UnderwritingResult } from '../types';
 import { ResponsiveContainer, BarChart, Bar, XAxis, YAxis, Tooltip, Cell } from 'recharts';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
@@ -12,30 +11,60 @@ interface ReportViewProps {
 }
 
 const ReportView: React.FC<ReportViewProps> = ({ applicant, report, onReset }) => {
+  const [hoveredMetric, setHoveredMetric] = useState<number | null>(null);
+
   const chartData = report.breakdown.map(item => ({ name: item.label, value: item.points }));
   
-  const formatCurrency = (amount: number) => {
-    return '₹' + amount.toLocaleString('en-IN');
+  const formatCurrency = (amount: number | undefined) => {
+    if (!amount) return '0.00';
+    return amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   };
 
-  const getCategoryColor = (cat: RiskCategory) => {
-    switch(cat) {
-      case RiskCategory.PREFERRED: return 'text-emerald-600 bg-emerald-50 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800 dark:text-emerald-400';
-      case RiskCategory.STANDARD: return 'text-blue-600 bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800 dark:text-blue-400';
-      case RiskCategory.SUBSTANDARD: return 'text-amber-600 bg-amber-50 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800 dark:text-amber-400';
-      case RiskCategory.DECLINE: return 'text-red-600 bg-red-50 border-red-200 dark:bg-red-900/20 dark:border-red-800 dark:text-red-400';
-      default: return 'text-slate-600 bg-slate-50 border-slate-200 dark:bg-slate-800 dark:border-slate-700 dark:text-slate-400';
+  const getCategoryColor = (cat: string) => {
+    const lowerCat = cat.toLowerCase();
+    if (lowerCat.includes('sub-standard')) {
+      return 'text-amber-700 bg-amber-50/80 border-amber-200 dark:bg-amber-900/20 dark:border-amber-800/50 dark:text-amber-400 shadow-amber-500/10';
     }
+    if (lowerCat.includes('standard')) {
+      return 'text-emerald-700 bg-emerald-50/80 border-emerald-200 dark:bg-emerald-900/20 dark:border-emerald-800/50 dark:text-emerald-400 shadow-emerald-500/10';
+    }
+    if (lowerCat.includes('decline') || lowerCat.includes('refer')) {
+      return 'text-rose-700 bg-rose-50/80 border-rose-200 dark:bg-rose-900/20 dark:border-rose-800/50 dark:text-rose-400 shadow-rose-500/10';
+    }
+    return 'text-blue-700 bg-blue-50/80 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800/50 dark:text-blue-400 shadow-blue-500/10';
   };
 
-  const getSeverityColor = (severity: string) => {
+  const getSeverityColor = (severity: number) => {
     switch(severity) {
-      case 'Critical': return 'bg-red-100 text-red-700 border-red-200 dark:bg-red-900/30 dark:text-red-300 dark:border-red-800';
-      case 'Severe': return 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800';
-      case 'Moderate': return 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800';
-      default: return 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800'; // Mild
+      case 4: return 'bg-rose-100 text-rose-700 border-rose-200 dark:bg-rose-900/30 dark:text-rose-300 dark:border-rose-800';
+      case 3: return 'bg-orange-100 text-orange-700 border-orange-200 dark:bg-orange-900/30 dark:text-orange-300 dark:border-orange-800';
+      case 2: return 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800';
+      case 1: 
+      default: return 'bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800';
     }
   };
+
+  const getSeverityLabel = (severity: number) => `Level ${severity}`;
+
+  const flags: { level: string, code: string, message: string }[] = [];
+  if (report.totalExtraMortalityPoints > 200) {
+    flags.push({ level: 'MANUAL_UW', code: 'HIGH_EMR', message: 'EMR exceeds 200, requires manual Chief Underwriter review.' });
+  }
+  if (applicant.habits && applicant.habits.length > 1) {
+    flags.push({ level: 'WARN', code: 'MULTI_HABIT', message: 'Multiple risky habits reported in lifestyle section.' });
+  }
+  if (applicant.medicalConditions && applicant.medicalConditions.length > 1) {
+    flags.push({ level: 'WARN', code: 'MULTI_MORBID', message: 'Co-morbidities detected across multiple health systems.' });
+  }
+  if (report.decision.toLowerCase().includes('decline')) {
+     flags.push({ level: 'FATAL', code: 'FIN_FAIL', message: 'Sum Assured exceeds maximum allowed financial multiplier.' });
+  }
+  if (flags.length === 0) {
+    flags.push({ level: 'INFO', code: 'CLEAN', message: 'No significant underwriting flags triggered.' });
+  }
+
+  const currentYear = new Date().getFullYear();
+  const calculatedDob = `01/01/${currentYear - applicant.age}`;
 
   const handlePrint = () => {
     window.print();
@@ -43,386 +72,527 @@ const ReportView: React.FC<ReportViewProps> = ({ applicant, report, onReset }) =
 
   const handleDownloadPDF = () => {
     const doc = new jsPDF();
-    const formatCurrencyPDF = (num: number) => `INR ${num.toLocaleString('en-IN')}`;
     const timestamp = new Date().toLocaleString('en-IN');
+    const formatNum = (num: number) => num.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const refNumber = Math.floor(Math.random() * 100000);
 
-    // Header
-    doc.setFontSize(20);
-    doc.setTextColor(37, 99, 235); // Blue-600
-    doc.text("InsureAI", 14, 22);
+    // --- COMPRESSED PDF AESTHETICS ---
+    doc.setFillColor(15, 23, 42);
+    doc.rect(0, 0, 210, 32, 'F');
     
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text("Automated Underwriting Report", 14, 28);
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(20);
+    doc.setFont(undefined, 'bold');
+    doc.text("InsureAI", 14, 16);
     
     doc.setFontSize(9);
-    doc.text(`Generated: ${timestamp}`, 140, 22);
-    doc.text(`Ref: #${Math.floor(Math.random() * 100000)}`, 140, 28);
+    doc.setFont(undefined, 'normal');
+    doc.setTextColor(148, 163, 184);
+    doc.text("Automated Underwriting Report", 14, 24);
     
-    doc.setLineWidth(0.5);
-    doc.setDrawColor(200);
-    doc.line(14, 34, 196, 34);
+    doc.setFontSize(8.5);
+    doc.setTextColor(255, 255, 255);
+    doc.text(`Generated: ${timestamp}`, 196, 16, { align: 'right' });
+    doc.setTextColor(56, 189, 248);
+    doc.text(`Ref: #${refNumber}`, 196, 24, { align: 'right' });
 
-    // Section 1: Applicant Profile
-    doc.setFontSize(12);
-    doc.setTextColor(15, 23, 42); // slate-900
-    doc.text("Applicant Risk Profile", 14, 45);
+    const isDecline = report.decision.toLowerCase().includes('decline');
+    const isStandard = report.decision.toLowerCase().includes('standard');
+    
+    if (isDecline) doc.setFillColor(225, 29, 72);
+    else if (isStandard) doc.setFillColor(16, 185, 129);
+    else doc.setFillColor(245, 158, 11);
+
+    doc.roundedRect(14, 38, 182, 10, 2, 2, 'F');
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
+    doc.text(`FINAL DECISION: ${report.decision.toUpperCase()}`, 105, 45, { align: 'center' });
+
+    const commonTableStyles = {
+      theme: 'grid' as const,
+      styles: { fontSize: 8.5, cellPadding: 2.5, textColor: [51, 65, 85], lineColor: [226, 232, 240] },
+      headStyles: { fillColor: [248, 250, 252], textColor: [15, 23, 42], fontStyle: 'bold' as const, lineWidth: 0.1 },
+      alternateRowStyles: { fillColor: [253, 254, 255] }
+    };
+
+    doc.setTextColor(15, 23, 42);
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
+    doc.text("1. Applicant Risk Profile", 14, 55);
+
+    const habitsText = applicant.habits && applicant.habits.length > 0 
+      ? applicant.habits.map(h => `${h.type}: ${h.level}`).join(', ') 
+      : "No risky habits disclosed";
 
     const profileData = [
-      ["Name", applicant.name, "Occupation", applicant.occupation],
-      ["Age/Gender", `${applicant.age} / ${applicant.gender}`, "Income", `INR ${applicant.income.toLocaleString('en-IN')}`],
-      ["Smoker", applicant.smoking ? "Yes" : "No", "Alcohol", applicant.alcohol ? "Yes" : "No"]
+      ["Name", applicant.name, "Age / Gender", `${applicant.age} / ${applicant.gender}`],
+      ["Date of Birth", calculatedDob, "Profession", applicant.occupation],
+      ["Avg Income", `Rs. ${formatNum((applicant as any).averageIncome || applicant.income || 0)}`, "BMI", applicant.bmi.toString()],
+      ["Sum Assured", `Rs. ${formatNum(applicant.sumAssured)}`, "Habits", habitsText],
+      ["Family History", (applicant as any).familyHistory || "Not Specified", "", ""]
     ];
 
     autoTable(doc, {
-      startY: 50,
+      ...commonTableStyles,
+      startY: 58,
+      head: [],
       body: profileData,
       theme: 'plain',
-      styles: { fontSize: 10, cellPadding: 2, textColor: [51, 65, 85] },
+      styles: { ...commonTableStyles.styles, cellPadding: 3, fontSize: 8.5 },
       columnStyles: {
-        0: { fontStyle: 'bold', width: 25 },
-        2: { fontStyle: 'bold', width: 25 }
+        0: { fontStyle: 'bold', textColor: [100, 116, 139], cellWidth: 35 },
+        1: { textColor: [15, 23, 42], fontStyle: 'bold', cellWidth: 55 },
+        2: { fontStyle: 'bold', textColor: [100, 116, 139], cellWidth: 35 },
+        3: { textColor: [15, 23, 42], fontStyle: 'bold' }
+      },
+      didDrawCell: (data) => {
+        doc.setDrawColor(241, 245, 249);
+        doc.setLineWidth(0.5);
+        doc.line(data.cell.x, data.cell.y + data.cell.height, data.cell.x + data.cell.width, data.cell.y + data.cell.height);
       }
     });
 
-    // Section 2: Medical Evaluation
-    let finalY = (doc as any).lastAutoTable.finalY || 50;
-    doc.text("Medical Evaluation Details", 14, finalY + 15);
-    
-    const medData = applicant.medicalConditions.map(c => [
-      c.name, 
-      c.severity, 
-      c.indicators || 'No specific clinical notes extracted.'
-    ]);
-    
-    if (medData.length === 0) {
-       doc.setFontSize(10);
-       doc.setTextColor(100);
-       doc.text("No significant medical conditions identified.", 14, finalY + 25);
-       finalY += 15;
-    } else {
-      autoTable(doc, {
-        startY: finalY + 20,
-        head: [['Condition', 'Severity', 'Indicators']],
-        body: medData,
-        theme: 'striped',
-        headStyles: { fillColor: [241, 245, 249], textColor: [71, 85, 105], fontStyle: 'bold' },
-        styles: { fontSize: 9, cellPadding: 3 }
-      });
-      finalY = (doc as any).lastAutoTable.finalY;
-    }
+    let finalY = (doc as any).lastAutoTable.finalY || 58;
 
-    // Section 3: Risk Assessment Summary
-    doc.setFontSize(12);
-    doc.setTextColor(15, 23, 42);
-    doc.text("Risk Assessment Summary", 14, finalY + 15);
-
-    // Draw a box for the summary
-    doc.setDrawColor(226, 232, 240); // slate-200
-    doc.setFillColor(248, 250, 252); // slate-50
-    doc.roundedRect(14, finalY + 20, 182, 35, 3, 3, 'FD');
-
-    // Column 1: Risk Classification (x=20)
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text("Risk Classification", 20, finalY + 30);
-    doc.setFontSize(14);
-    doc.setTextColor(37, 99, 235);
-    doc.setFont(undefined, 'bold');
-    doc.text(report.riskCategory, 20, finalY + 40);
-    doc.setFont(undefined, 'normal');
-
-    // Column 2: Total Loading (x=80, moved left to give space to Decision)
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text("Total Loading", 80, finalY + 30);
-    doc.setFontSize(14);
-    doc.setTextColor(15, 23, 42);
-    doc.text(`+${report.totalExtraMortalityPoints} EM Points`, 80, finalY + 40);
-
-    // Column 3: Decision (x=130, moved left)
-    doc.setFontSize(10);
-    doc.setTextColor(100);
-    doc.text("Decision", 130, finalY + 30);
     doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
     doc.setTextColor(15, 23, 42);
-    // Use maxWidth to wrap text within the remaining box width (~60mm)
-    doc.text(report.decision, 130, finalY + 40, { maxWidth: 60 });
+    doc.text("2. Extra Mortality (EMR) Breakdown", 14, finalY + 8);
 
-    finalY += 65;
+    const emrBody = report.breakdown.map(b => [b.label, `+${b.points}`]);
+    emrBody.push(['TOTAL EMR LOADING', `+${report.totalExtraMortalityPoints}`]);
 
-    // Section 4: Risk Breakdown
-    doc.setFontSize(12);
-    doc.setTextColor(15, 23, 42);
-    doc.text("Risk Breakdown", 14, finalY);
-
-    const breakdownTable = report.breakdown.map(b => [b.label, `+${b.points}`]);
     autoTable(doc, {
-      startY: finalY + 5,
-      head: [['Factor', 'Points Impact']],
-      body: breakdownTable,
-      theme: 'grid',
-      headStyles: { fillColor: [59, 130, 246] },
-      columnStyles: { 1: { halign: 'right', fontStyle: 'bold', textColor: [220, 38, 38] } },
-      styles: { fontSize: 9 }
+      ...commonTableStyles,
+      startY: finalY + 11,
+      head: [['Risk Component', 'Points Applied']],
+      body: emrBody,
+      didParseCell: (data) => {
+        if (data.row.index === emrBody.length - 1) {
+          data.cell.styles.fontStyle = 'bold';
+          data.cell.styles.fillColor = [241, 245, 249];
+          data.cell.styles.textColor = [15, 23, 42];
+        }
+      }
     });
 
     finalY = (doc as any).lastAutoTable.finalY;
 
-    // Section 5: Premium Calculation
-    // Check if we need a new page
-    if (finalY > 220) {
+    if (flags.length > 0) {
+      doc.setFontSize(11);
+      doc.setFont(undefined, 'bold');
+      doc.text("3. Underwriting System Flags", 14, finalY + 8);
+
+      const flagsBody = flags.map(f => [f.level, f.code, f.message]);
+
+      autoTable(doc, {
+        ...commonTableStyles,
+        startY: finalY + 11,
+        head: [['Severity', 'Rule Code', 'System Message']],
+        body: flagsBody,
+        columnStyles: {
+          0: { fontStyle: 'bold' },
+          1: { fontStyle: 'italic', textColor: [100, 116, 139] }
+        },
+        didParseCell: (data) => {
+          if (data.section === 'body' && data.column.index === 0) {
+            const level = data.cell.raw as string;
+            if (level === 'FATAL' || level === 'MANUAL_UW') data.cell.styles.textColor = [225, 29, 72];
+            else if (level === 'WARN') data.cell.styles.textColor = [217, 119, 6];
+            else data.cell.styles.textColor = [2, 132, 199];
+          }
+        }
+      });
+      finalY = (doc as any).lastAutoTable.finalY;
+    }
+
+    if (finalY > 250) {
       doc.addPage();
       finalY = 20;
     } else {
-      finalY += 15;
+      finalY += 8;
     }
 
-    doc.setFontSize(12);
+    doc.setFontSize(11);
+    doc.setFont(undefined, 'bold');
     doc.setTextColor(15, 23, 42);
-    doc.text("Premium Computation", 14, finalY);
+    doc.text("4. Premium Computation Schedule", 14, finalY);
 
-    const premiumData = [
-      ['Base Term Life Cover', formatCurrencyPDF(report.basePremium)],
-      [`Risk Loading (${report.totalExtraMortalityPoints} pts)`, formatCurrencyPDF(report.loadingAmount)],
+    const premiumBody = [
+      ['Base Life Cover', formatNum(applicant.sumAssured), formatNum(report.basePremium), formatNum(report.loadingAmount), formatNum(report.basePremium + report.loadingAmount)]
     ];
     
     if(report.riderPremiums.accident) {
-        premiumData.push(['Accident Rider', formatCurrencyPDF(report.riderPremiums.accident)]);
+        premiumBody.push(['Accident Benefit Rider', '-', formatNum(report.riderPremiums.accident), '-', formatNum(report.riderPremiums.accident)]);
     }
     if(report.riderPremiums.criticalIllness) {
-        premiumData.push(['Critical Illness Rider', formatCurrencyPDF(report.riderPremiums.criticalIllness)]);
+        premiumBody.push(['Critical Illness Rider', formatNum(applicant.sumAssured * 0.8), formatNum(report.riderPremiums.criticalIllness), '-', formatNum(report.riderPremiums.criticalIllness)]);
     }
     
-    // Add Total Row
-    premiumData.push(['TOTAL ANNUAL PREMIUM', formatCurrencyPDF(report.finalTotalPremium)]);
+    premiumBody.push(['TOTAL PAYABLE PREMIUM', '', '', '', formatNum(report.finalTotalPremium)]);
 
     autoTable(doc, {
-      startY: finalY + 5,
-      head: [['Component', 'Amount']],
-      body: premiumData,
-      theme: 'grid',
-      headStyles: { fillColor: [15, 23, 42] },
+      ...commonTableStyles,
+      startY: finalY + 3,
+      head: [['Coverage Type', 'Sum Assured (Rs)', 'Base Prem (Rs)', 'EM Loading (Rs)', 'Total (Rs)']],
+      body: premiumBody,
+      headStyles: { ...commonTableStyles.headStyles, halign: 'right' },
       columnStyles: {
-          1: { halign: 'right', fontStyle: 'bold' }
+        0: { halign: 'left', fontStyle: 'bold' },
+        1: { halign: 'right' },
+        2: { halign: 'right' },
+        3: { halign: 'right' },
+        4: { halign: 'right', fontStyle: 'bold', textColor: [15, 23, 42] }
       },
-      styles: { fontSize: 10, cellPadding: 4 },
       didParseCell: (data) => {
-          if (data.row.index === premiumData.length - 1) {
-              data.cell.styles.fontStyle = 'bold';
-              data.cell.styles.fillColor = [240, 253, 244];
-              data.cell.styles.textColor = [21, 128, 61];
-          }
+        if (data.section === 'head' && data.column.index === 0) {
+          data.cell.styles.halign = 'left';
+        }
+        if (data.row.index === premiumBody.length - 1) {
+            data.cell.styles.fontStyle = 'bold';
+            data.cell.styles.fillColor = [30, 58, 138];
+            data.cell.styles.textColor = [255, 255, 255];
+            data.cell.styles.fontSize = 9.5;
+        }
       }
     });
 
-    // Disclaimer Footer
     const pageCount = (doc as any).internal.getNumberOfPages();
     for(let i = 1; i <= pageCount; i++) {
         doc.setPage(i);
         doc.setFontSize(8);
-        doc.setTextColor(150);
-        doc.text('This is a computer-generated report based on submitted information. Valid subject to medical verification.', 14, 285);
-        doc.text(`Page ${i} of ${pageCount}`, 190, 285, { align: 'right' });
+        doc.setTextColor(148, 163, 184);
+        
+        doc.setDrawColor(226, 232, 240);
+        doc.line(14, 282, 196, 282);
+        
+        doc.text('This is a computer-generated underwriting assessment based on digital inputs. Valid subject to final medical verification.', 14, 288);
+        doc.text(`Page ${i} of ${pageCount}`, 196, 288, { align: 'right' });
     }
 
-    doc.save(`InsureAI_Report_${applicant.name.replace(/\s+/g, '_')}.pdf`);
+    doc.save(`InsureAI_Assessment_${applicant.name.replace(/\s+/g, '_')}.pdf`);
   };
 
-  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#06b6d4'];
+  const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#f43f5e', '#8b5cf6', '#0ea5e9'];
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-2xl shadow-xl border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-full animate-in fade-in slide-in-from-bottom-4 duration-500 print:shadow-none print:border-none transition-colors duration-300">
+    <div className="bg-white dark:bg-slate-900 rounded-3xl shadow-2xl shadow-blue-900/5 border border-slate-200/60 dark:border-slate-800 overflow-hidden flex flex-col h-full animate-in fade-in slide-in-from-bottom-4 duration-700 print:shadow-none print:border-none transition-all">
       {/* Header */}
-      <div className="bg-slate-900 dark:bg-slate-950 p-6 text-white flex justify-between items-center print:bg-slate-900 print:text-white">
+      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 dark:from-black dark:via-slate-900 dark:to-black p-6 md:p-8 text-white flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4 print:bg-white print:text-black print:hidden">
         <div>
-          <h2 className="text-xl font-bold flex items-center gap-2">
-            <i className="fa-solid fa-clipboard-check text-blue-400 no-print"></i>
-            Automated Underwriting Report
-          </h2>
-          <p className="text-slate-400 text-xs mt-1 uppercase tracking-widest font-medium">Case Ref: #{Math.floor(Math.random() * 100000)}</p>
+          <div className="flex items-center gap-3">
+            {/* <div className="bg-blue-500/20 p-2.5 rounded-xl border border-blue-500/30 shadow-[0_0_15px_rgba(59,130,246,0.5)]">
+              <i className="fa-solid fa-shield-check text-blue-400 text-xl"></i>
+            </div> */}
+            <h2 className="text-2xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-slate-400">
+              Underwriting Report
+            </h2>
+          </div>
+          <p className="text-slate-400 text-xs mt-2 uppercase tracking-widest font-semibold flex items-center gap-2">
+            <span>Ref: #{Math.floor(Math.random() * 100000)}</span>
+            <span className="w-1 h-1 rounded-full bg-slate-600"></span>
+            <span>InsureAI Core</span>
+          </p>
         </div>
         <button 
           onClick={onReset}
-          className="text-sm bg-white/10 hover:bg-white/20 px-4 py-2 rounded-lg transition-colors border border-white/10 no-print"
+          className="group text-sm bg-white/5 hover:bg-blue-600 px-5 py-2.5 rounded-xl transition-all duration-300 border border-white/10 hover:border-blue-500 backdrop-blur-sm font-medium flex items-center shadow-lg hover:shadow-blue-500/25"
         >
-          <i className="fa-solid fa-arrow-rotate-left mr-2"></i> New Case
+          <i className="fa-solid fa-arrow-rotate-left mr-2 opacity-70 group-hover:-rotate-180 transition-transform duration-500"></i> New Assessment
         </button>
       </div>
 
-      <div className="p-6 md:p-8 flex-grow overflow-y-auto space-y-8 max-h-[calc(100vh-18rem)] print:max-h-none print:overflow-visible">
-        {/* Profile Grid */}
-        <section>
-          <h3 className="text-sm font-bold text-slate-400 dark:text-slate-500 uppercase tracking-widest mb-4">Applicant Risk Profile</h3>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-xl print:border print:border-slate-100 dark:border-slate-700">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-bold">Name</span>
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-200 truncate">{applicant.name}</p>
+      <div className="p-6 md:p-8 flex-grow overflow-y-auto space-y-10 max-h-[calc(100vh-18rem)] print:max-h-none print:overflow-visible print:p-0 scroll-smooth">
+        
+        {/* Top Section: Decision & EMR */}
+        <section className="grid grid-cols-1 md:grid-cols-5 gap-6">
+          <div className={`col-span-1 md:col-span-3 p-8 rounded-3xl border shadow-lg flex flex-col items-center justify-center text-center relative overflow-hidden transition-all duration-500 hover:scale-[1.01] ${getCategoryColor(report.riskCategory)} print:border-slate-200 group`}>
+            <div className="absolute -right-10 -top-10 opacity-10 rotate-12 pointer-events-none group-hover:rotate-6 group-hover:scale-110 transition-transform duration-700">
+              <i className="fa-solid fa-stamp text-9xl"></i>
             </div>
-            <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-xl print:border print:border-slate-100 dark:border-slate-700">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-bold">Age/Gender</span>
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{applicant.age} / {applicant.gender}</p>
+            
+            <span className="text-xs uppercase font-black tracking-[0.2em] opacity-70 mb-2 z-10">Final Classification</span>
+            <h4 className="text-4xl md:text-5xl font-black uppercase tracking-tight z-10 drop-shadow-sm">{report.riskCategory}</h4>
+            <div className="h-1 w-16 bg-current opacity-20 my-5 rounded-full z-10 transition-all duration-500 group-hover:w-24"></div>
+            <p className="text-base font-bold bg-white/40 dark:bg-black/20 px-4 py-1.5 rounded-full z-10 backdrop-blur-sm border border-current/10">
+              {report.decision}
+            </p>
+          </div>
+
+          <div className="col-span-1 md:col-span-2 p-8 bg-slate-900 dark:bg-black rounded-3xl text-white flex flex-col items-center justify-center text-center shadow-xl shadow-slate-900/20 relative overflow-hidden print:bg-slate-100 print:text-black group hover:-translate-y-1 transition-all duration-300">
+            <div className="absolute inset-0 bg-gradient-to-br from-blue-600/20 to-transparent pointer-events-none opacity-50 group-hover:opacity-100 transition-opacity"></div>
+            
+            {/* Glowing orb behind score */}
+            <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-32 h-32 bg-blue-500/20 rounded-full blur-2xl group-hover:bg-blue-500/30 transition-colors duration-500"></div>
+
+            <span className="text-xs uppercase font-black tracking-[0.2em] text-slate-400 mb-2 z-10">Total Mortality Load</span>
+            <div className="flex items-baseline gap-1 z-10">
+              <h4 className="text-5xl md:text-6xl font-black text-white group-hover:scale-110 transition-transform duration-300">+{report.totalExtraMortalityPoints}</h4>
+              <span className="text-blue-400 font-bold text-xl">pts</span>
             </div>
-            <div className="bg-slate-50 dark:bg-slate-700/50 p-3 rounded-xl col-span-2 print:border print:border-slate-100 dark:border-slate-700">
-              <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-bold">Occupation</span>
-              <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{applicant.occupation}</p>
-            </div>
+            <p className="text-sm text-slate-400 mt-4 font-medium px-4 py-1 bg-white/5 rounded-full border border-white/5 z-10 backdrop-blur-sm">EMR Score</p>
           </div>
         </section>
 
-        {/* Medical Evaluation Details */}
-        <section className="bg-slate-50 dark:bg-slate-700/30 p-5 rounded-2xl border border-slate-100 dark:border-slate-700 print:border-slate-200">
-           <h3 className="text-sm font-bold text-slate-400 dark:text-slate-400 uppercase tracking-widest mb-4 flex items-center gap-2">
-             <i className="fa-solid fa-stethoscope text-blue-400 no-print"></i>
-             Medical Evaluation Details
-           </h3>
-           {applicant.medicalConditions.length > 0 ? (
-             <div className="grid grid-cols-1 gap-3">
-               {applicant.medicalConditions.map((cond, idx) => (
-                 <div key={idx} className="bg-white dark:bg-slate-800 p-4 rounded-xl border border-slate-100 dark:border-slate-700 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-3 print:shadow-none print:border-slate-200">
-                   <div>
-                     <div className="flex items-center gap-2">
-                       <p className="text-sm font-bold text-slate-800 dark:text-slate-200">{cond.name}</p>
-                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${getSeverityColor(cond.severity)}`}>
-                         {cond.severity}
+        {/* Profile Grid - EXPANDED & INTERACTIVE */}
+        <section>
+          <div className="flex items-center gap-3 mb-6">
+            <div className="h-8 w-1.5 bg-gradient-to-b from-blue-400 to-blue-600 rounded-full shadow-[0_0_10px_rgba(59,130,246,0.5)]"></div>
+            <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Applicant Profile</h3>
+          </div>
+          
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 lg:gap-5">
+            {[
+              { icon: 'fa-user', label: 'Full Name', value: applicant.name, color: 'text-blue-500', bg: 'bg-blue-50 dark:bg-blue-500/10' },
+              { icon: 'fa-cake-candles', label: 'Age / Gender', value: `${applicant.age} Yrs / ${applicant.gender}`, color: 'text-purple-500', bg: 'bg-purple-50 dark:bg-purple-500/10' },
+              { icon: 'fa-briefcase', label: 'Occupation', value: applicant.occupation, truncate: true, color: 'text-amber-500', bg: 'bg-amber-50 dark:bg-amber-500/10' },
+              { icon: 'fa-wallet', label: 'Avg Income', value: `₹ ${formatCurrency((applicant as any).averageIncome || applicant.income || 0)}`, color: 'text-emerald-500', bg: 'bg-emerald-50 dark:bg-emerald-500/10' },
+              { icon: 'fa-shield', label: 'Sum Assured', value: `₹ ${formatCurrency(applicant.sumAssured)}`, color: 'text-indigo-500', bg: 'bg-indigo-50 dark:bg-indigo-500/10' },
+              { icon: 'fa-weight-scale', label: 'BMI', value: applicant.bmi, color: 'text-pink-500', bg: 'bg-pink-50 dark:bg-pink-500/10' },
+              { icon: 'fa-users', label: 'Family History', value: (applicant as any).familyHistory || 'Not disclosed', colSpan: 2, color: 'text-cyan-500', bg: 'bg-cyan-50 dark:bg-cyan-500/10' },
+              { icon: 'fa-smoking', label: 'Disclosed Habits', value: applicant.habits && applicant.habits.length > 0 ? applicant.habits.map(h => `${h.type} (${h.level})`).join(' • ') : 'No significant habits', colSpan: 2, color: 'text-rose-500', bg: 'bg-rose-50 dark:bg-rose-500/10' },
+            ].map((item, idx) => (
+              <div 
+                key={idx} 
+                className={`group relative bg-white dark:bg-slate-800/50 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-blue-300 dark:hover:border-blue-600 hover:shadow-lg hover:-translate-y-1 transition-all duration-300 ${item.colSpan ? `col-span-2` : ''}`}
+              >
+                <div className="flex items-center gap-2 mb-2">
+                  <div className={`w-6 h-6 rounded-lg flex items-center justify-center ${item.bg} group-hover:scale-110 transition-transform duration-300`}>
+                    <i className={`fa-solid ${item.icon} ${item.color} text-[10px]`}></i>
+                  </div>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400 uppercase font-bold tracking-wider">{item.label}</span>
+                </div>
+                <p className={`text-sm md:text-base font-bold text-slate-800 dark:text-slate-200 pl-1 ${item.truncate ? 'truncate' : ''}`} title={item.truncate ? item.value.toString() : undefined}>
+                  {item.value}
+                </p>
+                {/* Accent border bottom on hover */}
+                <div className="absolute bottom-0 left-1/2 -translate-x-1/2 w-0 h-1 bg-blue-500 rounded-t-full group-hover:w-1/2 transition-all duration-300 opacity-0 group-hover:opacity-100"></div>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        {/* Analytics Section (Chart + Medical) */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <section className="bg-white dark:bg-slate-800 rounded-3xl p-6 md:p-8 border border-slate-200/60 dark:border-slate-700 shadow-sm hover:shadow-md transition-shadow">
+            <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-6 flex items-center gap-2">
+              <i className="fa-solid fa-chart-pie text-blue-500 bg-blue-50 dark:bg-blue-500/10 p-2 rounded-lg"></i>
+              Risk Impact Analysis
+            </h3>
+            <div className="h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={chartData} layout="vertical" margin={{ left: 0, right: 20, top: 0, bottom: 0 }}>
+                  <XAxis type="number" hide />
+                  <YAxis dataKey="name" type="category" width={110} tick={{ fontSize: 11, fill: '#64748b', fontWeight: 500 }} axisLine={false} tickLine={false} />
+                  <Tooltip 
+                    cursor={{ fill: 'rgba(148, 163, 184, 0.1)', radius: 8 }}
+                    contentStyle={{ borderRadius: '16px', border: 'none', boxShadow: '0 10px 25px -5px rgb(0 0 0 / 0.1)', padding: '12px', fontWeight: 'bold' }}
+                    formatter={(value: number) => [`+${value} EMR`, 'Impact']}
+                  />
+                  <Bar dataKey="value" radius={[0, 6, 6, 0]} barSize={28} onMouseEnter={(_, index) => setHoveredMetric(index)} onMouseLeave={() => setHoveredMetric(null)}>
+                    {chartData.map((entry, index) => (
+                      <Cell 
+                        key={`cell-${index}`} 
+                        fill={COLORS[index % COLORS.length]} 
+                        opacity={hoveredMetric === null || hoveredMetric === index ? 1 : 0.3}
+                        className="transition-opacity duration-300"
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </section>
+
+          <section className="bg-slate-50 dark:bg-slate-800/40 p-6 md:p-8 rounded-3xl border border-slate-200/60 dark:border-slate-700 shadow-inner relative overflow-hidden">
+            {/* Background Medical Cross Pattern */}
+            <div className="absolute -right-4 -bottom-4 opacity-[0.03] pointer-events-none text-9xl">
+              <i className="fa-solid fa-kit-medical"></i>
+            </div>
+
+            <h3 className="text-base font-bold text-slate-800 dark:text-slate-200 mb-6 flex items-center gap-2 relative z-10">
+               <i className="fa-solid fa-stethoscope text-emerald-500 bg-emerald-50 dark:bg-emerald-500/10 p-2 rounded-lg"></i>
+               Clinical Findings
+            </h3>
+             {applicant.medicalConditions.length > 0 ? (
+               <div className="grid grid-cols-1 gap-4 overflow-y-auto max-h-[240px] pr-2 custom-scrollbar relative z-10">
+                 {applicant.medicalConditions.map((cond, idx) => (
+                   <div key={idx} className="group bg-white dark:bg-slate-800 p-4 rounded-2xl border border-slate-200 dark:border-slate-700 shadow-sm hover:shadow-md hover:border-emerald-200 dark:hover:border-emerald-800 transition-all hover:-translate-x-1 cursor-default">
+                     <div className="flex justify-between items-start mb-2">
+                       <p className="text-sm font-bold text-slate-800 dark:text-slate-200 group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">{cond.name}</p>
+                       <span className={`text-[10px] font-bold px-2.5 py-1 rounded-md border ${getSeverityColor(cond.severity)}`}>
+                         {getSeverityLabel(cond.severity)}
                        </span>
                      </div>
-                     <p className="text-xs text-slate-500 dark:text-slate-400 mt-1 font-medium">
-                       <span className="text-slate-400 dark:text-slate-500 mr-1">Indicators:</span>
-                       {cond.indicators || 'No specific indicators cited in report.'}
+                     <p className="text-xs text-slate-500 dark:text-slate-400 font-medium leading-relaxed">
+                       {cond.indicators || 'Standard condition protocols applied.'}
                      </p>
                    </div>
-                   {/* Visual indicator of severity level */}
-                   <div className="flex gap-1 no-print">
-                      <div className={`w-2 h-2 rounded-full ${['Mild', 'Moderate', 'Severe', 'Critical'].indexOf(cond.severity) >= 0 ? 'bg-emerald-400' : 'bg-slate-200 dark:bg-slate-700'}`}></div>
-                      <div className={`w-2 h-2 rounded-full ${['Moderate', 'Severe', 'Critical'].indexOf(cond.severity) >= 0 ? 'bg-amber-400' : 'bg-slate-200 dark:bg-slate-700'}`}></div>
-                      <div className={`w-2 h-2 rounded-full ${['Severe', 'Critical'].indexOf(cond.severity) >= 0 ? 'bg-orange-400' : 'bg-slate-200 dark:bg-slate-700'}`}></div>
-                      <div className={`w-2 h-2 rounded-full ${['Critical'].indexOf(cond.severity) >= 0 ? 'bg-red-400' : 'bg-slate-200 dark:bg-slate-700'}`}></div>
-                   </div>
+                 ))}
+               </div>
+             ) : (
+               <div className="h-full min-h-[200px] flex flex-col items-center justify-center text-center p-6 bg-white dark:bg-slate-800 rounded-2xl border border-dashed border-slate-300 dark:border-slate-600 relative z-10 group hover:border-emerald-400 transition-colors">
+                 <div className="w-14 h-14 bg-emerald-50 dark:bg-emerald-900/20 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform duration-500 group-hover:bg-emerald-100 dark:group-hover:bg-emerald-900/40">
+                   <i className="fa-solid fa-check text-emerald-500 text-2xl group-hover:rotate-12 transition-transform"></i>
                  </div>
-               ))}
-             </div>
-           ) : (
-             <div className="text-center py-4 bg-white dark:bg-slate-800 rounded-xl border border-dashed border-slate-200 dark:border-slate-700">
-               <p className="text-sm text-slate-500 dark:text-slate-400 font-medium">No medical conditions identified.</p>
-             </div>
-           )}
-        </section>
+                 <p className="text-sm text-slate-600 dark:text-slate-300 font-bold">Clean Health Profile</p>
+                 <p className="text-xs text-slate-400 mt-1">No pre-existing conditions reported.</p>
+               </div>
+             )}
+          </section>
+        </div>
 
-        {/* Decision & Rating */}
-        <section className="grid grid-cols-1 md:grid-cols-2 gap-8">
-          <div className={`p-6 rounded-2xl border-2 flex flex-col items-center justify-center text-center ${getCategoryColor(report.riskCategory)} print:border-slate-200`}>
-            <span className="text-[10px] uppercase font-black tracking-widest opacity-60">Risk Classification</span>
-            <h4 className="text-3xl font-black mt-1 uppercase">{report.riskCategory}</h4>
-            <div className="h-px w-12 bg-current opacity-20 my-4"></div>
-            <p className="text-sm font-bold">{report.decision}</p>
-          </div>
-
-          <div className="p-6 bg-slate-900 dark:bg-black rounded-2xl text-white flex flex-col items-center justify-center text-center print:bg-slate-900">
-            <span className="text-[10px] uppercase font-black tracking-widest text-slate-500">Mortality Loading</span>
-            <h4 className="text-4xl font-black mt-1 text-blue-400">+{report.totalExtraMortalityPoints}</h4>
-            <p className="text-xs text-slate-400 mt-2 font-medium">Extra Mortality Points (EM)</p>
-          </div>
-        </section>
-
-        {/* Breakdown Visualization */}
-        <section className="bg-slate-50 dark:bg-slate-700/30 rounded-2xl p-6 print:border print:border-slate-100">
-          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-6 flex items-center gap-2">
-            <i className="fa-solid fa-chart-bar text-blue-500 no-print"></i>
-            Risk Contribution Analysis
-          </h3>
-          <div className="h-64 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} layout="vertical" margin={{ left: 40, right: 20 }}>
-                <XAxis type="number" hide />
-                <YAxis dataKey="name" type="category" width={100} tick={{ fontSize: 10, fill: '#64748b' }} />
-                <Tooltip 
-                  cursor={{ fill: 'transparent' }}
-                  contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 6px -1px rgb(0 0 0 / 0.1)' }}
-                  formatter={(value: number) => [`${value} pts`, 'Impact']}
-                />
-                <Bar dataKey="value" radius={[0, 4, 4, 0]} barSize={24}>
-                  {chartData.map((entry, index) => (
-                    <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                  ))}
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </section>
-
-        {/* Premium Computation */}
-        <section>
-          <h3 className="text-sm font-bold text-slate-800 dark:text-slate-200 mb-4 flex items-center gap-2">
-            <i className="fa-solid fa-receipt text-blue-500 no-print"></i>
-            Premium Computation
-          </h3>
-          <div className="bg-white dark:bg-slate-800 border border-slate-100 dark:border-slate-700 rounded-2xl overflow-hidden shadow-sm print:border-slate-200">
-            <table className="w-full text-sm">
-              <thead className="bg-slate-50 dark:bg-slate-700/50 print:bg-slate-100">
-                <tr>
-                  <th className="text-left px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Component</th>
-                  <th className="text-right px-4 py-3 font-semibold text-slate-600 dark:text-slate-300">Amount</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100 dark:divide-slate-700">
-                <tr>
-                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">Base Term Life Cover</td>
-                  <td className="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{formatCurrency(report.basePremium)}</td>
-                </tr>
-                <tr>
-                  <td className="px-4 py-3 text-slate-500 dark:text-slate-400">Risk Loading ({report.totalExtraMortalityPoints} EM pts)</td>
-                  <td className="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{formatCurrency(report.loadingAmount)}</td>
-                </tr>
-                {report.riderPremiums.accident !== undefined && report.riderPremiums.accident > 0 && (
-                  <tr>
-                    <td className="px-4 py-3 text-slate-500 dark:text-slate-400">Accident Rider</td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{formatCurrency(report.riderPremiums.accident)}</td>
-                  </tr>
-                )}
-                {report.riderPremiums.criticalIllness !== undefined && report.riderPremiums.criticalIllness > 0 && (
-                  <tr>
-                    <td className="px-4 py-3 text-slate-500 dark:text-slate-400">Critical Illness Rider</td>
-                    <td className="px-4 py-3 text-right font-medium text-slate-800 dark:text-slate-200">{formatCurrency(report.riderPremiums.criticalIllness)}</td>
-                  </tr>
-                )}
-              </tbody>
-              <tfoot className="bg-blue-600 dark:bg-blue-800 text-white font-bold print:bg-blue-600 print:text-white">
-                <tr>
-                  <td className="px-4 py-4 text-lg">Final Annual Premium</td>
-                  <td className="px-4 py-4 text-right text-lg">{formatCurrency(report.finalTotalPremium)}</td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </section>
-
-        {/* Policy Exclusions / Remarks */}
-        {/* {report.riskCategory === RiskCategory.SUBSTANDARD && (
-          <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800 flex gap-3 print:bg-white print:border-slate-200">
-            <i className="fa-solid fa-triangle-exclamation text-amber-500 text-lg mt-0.5 no-print"></i>
-            <div>
-              <h5 className="text-sm font-bold text-amber-800 dark:text-amber-300 print:text-slate-800">Underwriting Remark</h5>
-              <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 print:text-slate-600">Due to extra mortality points, the policy is subject to a <b>Permanent Exclusion Rider</b> for the declared medical conditions. Coverage remains active for all other standard perils.</p>
+        {/* Bottom Section: Flags & Financials */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-8 w-1.5 bg-gradient-to-b from-amber-400 to-amber-600 rounded-full shadow-[0_0_10px_rgba(245,158,11,0.5)]"></div>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">System Alerts</h3>
             </div>
-          </div>
-        )} */}
+            <div className="bg-white dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700 rounded-3xl overflow-hidden shadow-sm">
+              <table className="w-full text-sm">
+                <thead className="bg-slate-50/80 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700">
+                  <tr>
+                    <th className="text-left px-5 py-4 font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Severity</th>
+                    <th className="text-left px-5 py-4 font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Alert Details</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-slate-700/50">
+                  {flags.map((flag, idx) => {
+                    const isCritical = flag.level === 'FATAL' || flag.level === 'MANUAL_UW';
+                    return (
+                      <tr key={idx} className={`hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group ${isCritical ? 'bg-rose-50/30 dark:bg-rose-900/10' : ''}`}>
+                        <td className="px-5 py-4 align-top w-36">
+                          <div className="flex items-center gap-2">
+                            {isCritical && (
+                              <span className="relative flex h-2 w-2">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-rose-400 opacity-75"></span>
+                                <span className="relative inline-flex rounded-full h-2 w-2 bg-rose-500"></span>
+                              </span>
+                            )}
+                            <span className={`inline-flex items-center px-2 py-1 rounded text-[10px] font-black tracking-widest uppercase ${
+                              isCritical ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-400' : 
+                              flag.level === 'WARN' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' : 
+                              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                            }`}>
+                              {flag.level}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="px-5 py-4">
+                          <div className="font-mono text-xs font-bold text-slate-800 dark:text-slate-200 mb-1 group-hover:text-blue-600 dark:group-hover:text-blue-400 transition-colors">{flag.code}</div>
+                          <div className="text-slate-500 dark:text-slate-400 text-sm leading-relaxed">{flag.message}</div>
+                        </td>
+                      </tr>
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          <section>
+            <div className="flex items-center gap-3 mb-6">
+              <div className="h-8 w-1.5 bg-gradient-to-b from-indigo-400 to-indigo-600 rounded-full shadow-[0_0_10px_rgba(99,102,241,0.5)]"></div>
+              <h3 className="text-lg font-bold text-slate-800 dark:text-slate-100">Premium Schedule</h3>
+            </div>
+            <div className="bg-white dark:bg-slate-800 border border-slate-200/60 dark:border-slate-700 rounded-3xl overflow-hidden shadow-sm">
+              <table className="w-full text-left border-collapse">
+                <thead className="bg-slate-50/80 dark:bg-slate-800/80 border-b border-slate-100 dark:border-slate-700">
+                  <tr>
+                    <th className="px-5 py-4 font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider">Coverage Component</th>
+                    <th className="px-5 py-4 font-bold text-slate-500 dark:text-slate-400 text-xs uppercase tracking-wider text-right">Premium</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50 dark:divide-slate-700/50">
+                  <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group">
+                    <td className="px-5 py-4">
+                      <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                        <i className="fa-solid fa-shield-heart text-blue-500 opacity-50 group-hover:opacity-100 transition-opacity"></i>
+                        Base Life Cover
+                      </div>
+                      <div className="text-xs text-slate-500 mt-1 ml-6">Sum: ₹ {formatCurrency(applicant.sumAssured)}</div>
+                    </td>
+                    <td className="px-5 py-4 text-right">
+                      <div className="font-bold text-slate-800 dark:text-slate-200">₹ {formatCurrency(report.basePremium)}</div>
+                    </td>
+                  </tr>
+                  
+                  {report.loadingAmount > 0 && (
+                     <tr className="hover:bg-rose-50/50 dark:hover:bg-rose-900/10 transition-colors group">
+                       <td className="px-5 py-4">
+                         <div className="font-bold text-rose-600 dark:text-rose-400 flex items-center gap-2">
+                           <i className="fa-solid fa-arrow-up-right-dots text-xs group-hover:-translate-y-0.5 group-hover:translate-x-0.5 transition-transform"></i> 
+                           EMR Loading
+                         </div>
+                         <div className="text-xs text-slate-500 mt-1 ml-5">Based on risk profile</div>
+                       </td>
+                       <td className="px-5 py-4 text-right">
+                         <div className="font-bold text-rose-600 dark:text-rose-400">+ ₹ {formatCurrency(report.loadingAmount)}</div>
+                       </td>
+                     </tr>
+                  )}
+
+                  {report.riderPremiums.accident !== undefined && report.riderPremiums.accident > 0 && (
+                    <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group">
+                      <td className="px-5 py-4">
+                        <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                          <i className="fa-solid fa-car-burst text-indigo-500 opacity-50 group-hover:opacity-100 transition-opacity"></i>
+                          Accident Rider
+                        </div>
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <div className="font-bold text-slate-800 dark:text-slate-200">₹ {formatCurrency(report.riderPremiums.accident)}</div>
+                      </td>
+                    </tr>
+                  )}
+                  {report.riderPremiums.criticalIllness !== undefined && report.riderPremiums.criticalIllness > 0 && (
+                    <tr className="hover:bg-slate-50 dark:hover:bg-slate-800/50 transition-colors group">
+                      <td className="px-5 py-4">
+                        <div className="font-bold text-slate-800 dark:text-slate-200 flex items-center gap-2">
+                          <i className="fa-solid fa-heart-pulse text-rose-500 opacity-50 group-hover:opacity-100 transition-opacity"></i>
+                          Critical Illness Rider
+                        </div>
+                        <div className="text-xs text-slate-500 mt-1 ml-6">Sum: ₹ {formatCurrency(applicant.sumAssured * 0.8)}</div>
+                      </td>
+                      <td className="px-5 py-4 text-right">
+                        <div className="font-bold text-slate-800 dark:text-slate-200">₹ {formatCurrency(report.riderPremiums.criticalIllness)}</div>
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+                <tfoot className="bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-700 text-white relative overflow-hidden group">
+                  {/* Shimmer effect on hover */}
+                  <div className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/20 to-transparent group-hover:animate-[shimmer_1.5s_infinite]"></div>
+                  <tr>
+                    <td className="px-5 py-5 text-sm uppercase tracking-wider font-bold relative z-10">Total Annual Premium</td>
+                    <td className="px-5 py-5 text-right text-xl font-black relative z-10">₹ {formatCurrency(report.finalTotalPremium)}</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          </section>
+        </div>
       </div>
 
-      <div className="p-4 bg-slate-50 dark:bg-slate-700/30 border-t border-slate-100 dark:border-slate-700 flex justify-between items-center text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest no-print">
-        <span>Generated by InsureAI Core v3.0</span>
-        <div className="flex gap-4">
+      {/* Footer Actions */}
+      <div className="p-5 md:px-8 bg-slate-50 dark:bg-slate-900/50 border-t border-slate-200/60 dark:border-slate-800 flex flex-col sm:flex-row justify-between items-center gap-4 text-xs font-semibold uppercase tracking-wider no-print">
+        <span className="text-slate-400 flex items-center gap-2">
+          <i className="fa-solid fa-lock text-[10px]"></i> Generated securely by InsureAI
+        </span>
+        <div className="flex gap-3 w-full sm:w-auto">
           <button 
             onClick={handleDownloadPDF}
-            className="hover:text-blue-500 transition-colors flex items-center gap-1"
+            className="flex-1 sm:flex-none justify-center hover:bg-white dark:hover:bg-slate-800 px-5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-300 dark:hover:border-blue-700 transition-all flex items-center gap-2 shadow-sm hover:shadow group"
           >
-            <i className="fa-solid fa-download"></i> Download PDF
+            <i className="fa-solid fa-file-pdf group-hover:scale-110 transition-transform text-rose-500"></i> Save PDF
           </button>
           <button 
             onClick={handlePrint}
-            className="hover:text-blue-500 transition-colors flex items-center gap-1"
+            className="flex-1 sm:flex-none justify-center hover:bg-white dark:hover:bg-slate-800 px-5 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-300 dark:hover:border-blue-700 transition-all flex items-center gap-2 shadow-sm hover:shadow group"
           >
-            <i className="fa-solid fa-print"></i> Print Report
+            <i className="fa-solid fa-print group-hover:scale-110 transition-transform text-slate-500 dark:text-slate-400"></i> Print
           </button>
         </div>
       </div>

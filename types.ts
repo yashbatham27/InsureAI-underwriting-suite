@@ -1,23 +1,14 @@
-
-export enum Severity {
-  MILD = 'Mild',
-  MODERATE = 'Moderate',
-  SEVERE = 'Severe',
-  CRITICAL = 'Critical'
-}
-
-export enum RiskCategory {
-  STANDARD = 'Standard',
-  PREFERRED = 'Preferred',
-  SUBSTANDARD = 'Substandard',
-  DECLINE = 'Decline',
-  POSTPONE = 'Postpone'
-}
+export type Severity = 1 | 2 | 3 | 4;
 
 export interface MedicalCondition {
   name: string;
   severity: Severity;
   indicators?: string;
+}
+
+export interface Habit {
+  type: string; // e.g., 'Smoking', 'Alcoholic drinks', 'Tobacco'
+  level: 'Occasionally' | 'Regular (moderate)' | 'Regular (high dose)';
 }
 
 export interface ApplicantInfo {
@@ -26,8 +17,10 @@ export interface ApplicantInfo {
   gender: 'Male' | 'Female' | 'Other';
   occupation: string;
   income: number;
-  smoking: boolean;
-  alcohol: boolean;
+  sumAssured: number;
+  bmi: number;
+  familyHistory: string;
+  habits: Habit[];
   medicalConditions: MedicalCondition[];
   selectedRiders: {
     accidentCover: boolean;
@@ -39,7 +32,7 @@ export interface UnderwritingResult {
   totalExtraMortalityPoints: number;
   medicalPoints: number;
   occupationalPoints: number;
-  riskCategory: RiskCategory;
+  riskCategory: string; // Dynamically assigned (e.g., 'Standard', 'Sub-standard (Class II)')
   decision: string;
   basePremium: number;
   riderPremiums: {

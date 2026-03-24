@@ -1,4 +1,3 @@
-
 import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { ApplicantInfo, UnderwritingResult, HistoryItem } from './types';
 import { extractUnderwritingData, extractUnderwritingDataFromPDF } from './services/geminiService';
