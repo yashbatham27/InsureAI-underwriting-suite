@@ -398,7 +398,7 @@ const ReportView: React.FC<ReportViewProps> = ({ applicant, report, onReset }) =
         </section>
 
         {/* Policy Exclusions / Remarks */}
-        {report.riskCategory === RiskCategory.SUBSTANDARD && (
+        {/* {report.riskCategory === RiskCategory.SUBSTANDARD && (
           <div className="p-4 bg-amber-50 dark:bg-amber-900/20 rounded-xl border border-amber-100 dark:border-amber-800 flex gap-3 print:bg-white print:border-slate-200">
             <i className="fa-solid fa-triangle-exclamation text-amber-500 text-lg mt-0.5 no-print"></i>
             <div>
@@ -406,7 +406,7 @@ const ReportView: React.FC<ReportViewProps> = ({ applicant, report, onReset }) =
               <p className="text-xs text-amber-700 dark:text-amber-400 mt-1 print:text-slate-600">Due to extra mortality points, the policy is subject to a <b>Permanent Exclusion Rider</b> for the declared medical conditions. Coverage remains active for all other standard perils.</p>
             </div>
           </div>
-        )}
+        )} */}
       </div>
 
       <div className="p-4 bg-slate-50 dark:bg-slate-700/30 border-t border-slate-100 dark:border-slate-700 flex justify-between items-center text-[10px] text-slate-400 dark:text-slate-500 font-bold uppercase tracking-widest no-print">
