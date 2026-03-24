@@ -4,6 +4,13 @@ import { ApplicantInfo } from "../types";
 // Always use named parameter for apiKey and rely solely on process.env.API_KEY.
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
 
+// Define your model cascade from fastest/cheapest to most capable fallback
+const MODEL_CASCADE = [
+  'gemini-3-flash-preview',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash',
+];
+
 const EXTRACTION_SCHEMA = {
   type: Type.OBJECT,
   properties: {
@@ -57,7 +64,6 @@ const EXTRACTION_SCHEMA = {
 function cleanJson(text: string): string {
   if (!text) return "{}";
   let cleaned = text.trim();
-  // Remove markdown code blocks if present
   if (cleaned.startsWith("```json")) {
     cleaned = cleaned.replace(/^```json/, "").replace(/```$/, "");
   } else if (cleaned.startsWith("```")) {
@@ -67,7 +73,6 @@ function cleanJson(text: string): string {
 }
 
 function normalizeData(data: any, originalContext: string = ""): { applicant: ApplicantInfo, missing: string[] } {
-  // Regex Fallbacks for robust extraction if AI misses simple fields
   if (!data.age) {
     const ageMatch = originalContext.match(/Age:\s*(\d+)/i);
     if (ageMatch) data.age = parseInt(ageMatch[1], 10);
@@ -95,17 +100,58 @@ function normalizeData(data: any, originalContext: string = ""): { applicant: Ap
   const applicant = {
     ...data,
     averageIncome: data.averageIncome || data.income || 0,
-    // Ensure fallbacks for nested objects if AI misses them entirely
     habits: data.habits || [],
     familyHistory: data.familyHistory || "Not Disclosed",
     medicalConditions: (data.medicalConditions || []).map((c: any) => ({
       ...c,
-      // Enforce numeric severity to match type 1 | 2 | 3 | 4
       severity: [1, 2, 3, 4].includes(c.severity) ? c.severity : 1 
     }))
   };
 
   return { applicant: applicant as ApplicantInfo, missing: Array.from(new Set(missing)) };
+}
+
+/**
+ * Helper function to attempt generation across multiple models in case of limits/failures
+ */
+async function generateWithFallback(
+  contents: any, 
+  config: any, 
+  signal?: AbortSignal
+) {
+  let lastError: any;
+
+  for (const model of MODEL_CASCADE) {
+    if (signal?.aborted) throw new Error('Aborted');
+
+    try {
+      console.log(`[AI] Attempting extraction with: ${model}`);
+      const response = await ai.models.generateContent({
+        model,
+        contents,
+        config,
+      });
+      return response;
+    } catch (error: any) {
+      lastError = error;
+      console.warn(`[AI] Model ${model} failed:`, error.message);
+      
+      // If the user cancelled the request, don't try the next model
+      if (signal?.aborted || error.name === 'AbortError') {
+        throw new Error('Aborted');
+      }
+
+      // If it's a structural 400 error (bad request/schema), retrying usually won't help. 
+      // But for 429 (Rate Limit) or 503 (Overloaded), we want to continue to the next model.
+      if (error.status === 400) {
+        throw error; 
+      }
+    }
+  }
+
+  // If the loop finishes without returning, all models failed
+  console.error("[AI] All fallback models failed.");
+  throw lastError;
 }
 
 export async function extractUnderwritingData(
@@ -129,24 +175,16 @@ export async function extractUnderwritingData(
     - IMPORTANT: Even if the text is simple, do not fail. Extract what is there.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: EXTRACTION_SCHEMA,
-      },
-    });
+  const response = await generateWithFallback(
+    prompt,
+    {
+      responseMimeType: "application/json",
+      responseSchema: EXTRACTION_SCHEMA,
+    },
+    signal
+  );
 
-    return normalizeData(JSON.parse(cleanJson(response.text)), fullContext);
-  } catch (error: any) {
-    if (signal?.aborted || error.name === 'AbortError') {
-      throw new Error('Aborted');
-    }
-    console.error("Gemini API Error:", error);
-    throw error;
-  }
+  return normalizeData(JSON.parse(cleanJson(response.text)), fullContext);
 }
 
 export async function extractUnderwritingDataFromPDF(
@@ -165,32 +203,24 @@ export async function extractUnderwritingDataFromPDF(
     - Extract specific clinical indicators into the 'indicators' field.
   `;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: {
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'application/pdf',
-              data: base64Pdf
-            }
-          },
-          { text: prompt }
-        ]
-      },
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: EXTRACTION_SCHEMA,
-      }
-    });
+  const response = await generateWithFallback(
+    {
+      parts: [
+        {
+          inlineData: {
+            mimeType: 'application/pdf',
+            data: base64Pdf
+          }
+        },
+        { text: prompt }
+      ]
+    },
+    {
+      responseMimeType: "application/json",
+      responseSchema: EXTRACTION_SCHEMA,
+    },
+    signal
+  );
 
-    return normalizeData(JSON.parse(cleanJson(response.text)));
-  } catch (error: any) {
-    if (signal?.aborted || error.name === 'AbortError') {
-      throw new Error('Aborted');
-    }
-    console.error("Gemini API Error:", error);
-    throw error;
-  }
+  return normalizeData(JSON.parse(cleanJson(response.text)));
 }

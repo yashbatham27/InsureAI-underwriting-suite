@@ -47,7 +47,8 @@ const App: React.FC = () => {
     setTheme(prev => prev === 'light' ? 'dark' : 'light');
   };
 
-  const saveToHistory = (applicant: ApplicantInfo, report: UnderwritingResult, pText: string, mText: string) => {
+  // OPTIMIZATION: Functional state update prevents stale closures
+  const saveToHistory = useCallback((applicant: ApplicantInfo, report: UnderwritingResult, pText: string, mText: string) => {
     const newItem: HistoryItem = {
       id: Date.now().toString(),
       timestamp: Date.now(),
@@ -57,16 +58,20 @@ const App: React.FC = () => {
       medicalText: mText
     };
     
-    const updatedHistory = [newItem, ...history];
-    setHistory(updatedHistory);
-    localStorage.setItem('uw_history', JSON.stringify(updatedHistory));
-  };
+    setHistory(prev => {
+      const updatedHistory = [newItem, ...prev];
+      localStorage.setItem('uw_history', JSON.stringify(updatedHistory));
+      return updatedHistory;
+    });
+  }, []);
 
   const deleteHistoryItem = (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    const updated = history.filter(item => item.id !== id);
-    setHistory(updated);
-    localStorage.setItem('uw_history', JSON.stringify(updated));
+    setHistory(prev => {
+      const updated = prev.filter(item => item.id !== id);
+      localStorage.setItem('uw_history', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const loadHistoryItem = (item: HistoryItem) => {
@@ -113,29 +118,27 @@ const App: React.FC = () => {
     setError('Operation cancelled by user.');
   }, []);
 
+  // Removed `history` from dependency array thanks to functional state update
   const handleProcess = useCallback(async () => {
     if (!proposalText.trim() && !medicalText.trim()) {
       setError('Please provide proposal details or a medical report.');
       return;
     }
 
-    // Reset State
     setLoading(true);
     setError(null);
     setResult(null);
-    setShowHistory(false); // Ensure we are looking at input
+    setShowHistory(false);
     
-    // Setup Controllers
     abortControllerRef.current = new AbortController();
     const progressInterval = startProgressSimulation();
 
-    // Setup Timeout Safety (30s)
     timeoutRef.current = setTimeout(() => {
       abortControllerRef.current?.abort();
       setError("Analysis timed out. The server is taking too long to respond. Please try again or use shorter text.");
       setLoading(false);
       clearInterval(progressInterval);
-    }, 30000);
+    }, 60000);
 
     try {
       const { applicant, missing } = await extractUnderwritingData(
@@ -144,7 +147,6 @@ const App: React.FC = () => {
         abortControllerRef.current.signal
       );
       
-      // Clear timeout as soon as we get data
       if (timeoutRef.current) clearTimeout(timeoutRef.current);
 
       if (missing.length > 0) {
@@ -174,7 +176,7 @@ const App: React.FC = () => {
       setProgress(0);
       setLoadingStep('');
     }
-  }, [proposalText, medicalText, history]);
+  }, [proposalText, medicalText, saveToHistory]);
 
   const handlePdfFile = useCallback(async (file: File) => {
     setLoading(true);
@@ -185,13 +187,12 @@ const App: React.FC = () => {
     abortControllerRef.current = new AbortController();
     const progressInterval = startProgressSimulation();
 
-    // Setup Timeout Safety (45s for PDF)
     timeoutRef.current = setTimeout(() => {
       abortControllerRef.current?.abort();
       setError("Analysis timed out. The PDF might be too large or complex.");
       setLoading(false);
       clearInterval(progressInterval);
-    }, 45000);
+    }, 90000);
 
     try {
       const reader = new FileReader();
@@ -221,8 +222,6 @@ const App: React.FC = () => {
 
       const report = runUnderwriting(applicant);
       setResult({ applicant, report });
-      // Note: We don't save PDF text to history as it's binary/image based usually, 
-      // but we save the extracted result.
       saveToHistory(applicant, report, "PDF Upload", "PDF Upload");
 
     } catch (err: any) {
@@ -241,7 +240,7 @@ const App: React.FC = () => {
       setProgress(0);
       setLoadingStep('');
     }
-  }, [history]);
+  }, [saveToHistory]);
 
   const handleReset = () => {
     setResult(null);
@@ -251,8 +250,8 @@ const App: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex flex-col text-slate-900 dark:text-slate-100">
-      <div className="no-print">
+    <div className="min-h-screen flex flex-col text-slate-900 dark:text-slate-100 selection:bg-blue-500/30">
+      <div className="no-print z-50 relative">
         <Header 
           onToggleHistory={() => setShowHistory(!showHistory)} 
           showHistory={showHistory} 
@@ -261,8 +260,10 @@ const App: React.FC = () => {
         />
       </div>
       
-      <main className="flex-grow container mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8">
-        <div className={`lg:col-span-5 space-y-6 no-print ${result && !showHistory ? 'hidden lg:block' : ''}`}>
+      <main className="flex-grow container mx-auto p-4 md:p-8 grid grid-cols-1 lg:grid-cols-12 gap-8 relative z-10">
+        
+        {/* Input/History Side */}
+        <div className={`lg:col-span-5 space-y-6 no-print transition-all duration-500 ${result && !showHistory ? 'hidden lg:block' : ''}`}>
           {showHistory ? (
             <HistoryPanel 
               history={history} 
@@ -288,7 +289,8 @@ const App: React.FC = () => {
           )}
         </div>
 
-        <div className={`lg:col-span-7 ${!result ? 'hidden lg:flex items-center justify-center' : ''}`}>
+        {/* Output/Empty State Side */}
+        <div className={`lg:col-span-7 transition-all duration-500 ${!result ? 'hidden lg:flex items-center justify-center' : ''}`}>
           {result ? (
             <ReportView 
               applicant={result.applicant} 
@@ -296,26 +298,36 @@ const App: React.FC = () => {
               onReset={handleReset} 
             />
           ) : (
-            <div className="text-center p-12 bg-white dark:bg-slate-800 rounded-2xl shadow-sm border-2 border-dashed border-slate-200 dark:border-slate-700 w-full no-print">
-              <div className="bg-slate-50 dark:bg-slate-700 w-20 h-20 rounded-full flex items-center justify-center mx-auto mb-4">
-                <i className="fa-solid fa-file-shield text-3xl text-slate-300 dark:text-slate-500"></i>
+            <div className="text-center p-12 bg-white/50 dark:bg-slate-900/50 backdrop-blur-xl rounded-3xl shadow-2xl shadow-blue-900/5 border border-slate-200/60 dark:border-slate-800 w-full no-print relative overflow-hidden group">
+              
+              {/* Background Glows */}
+              <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-64 h-64 bg-blue-500/10 rounded-full blur-3xl group-hover:bg-blue-500/20 transition-colors duration-700"></div>
+              
+              <div className="relative z-10">
+                <div className="w-24 h-24 bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-slate-800 dark:to-slate-900 rounded-2xl flex items-center justify-center mx-auto mb-8 shadow-inner border border-white/50 dark:border-slate-700 group-hover:-translate-y-2 transition-transform duration-500">
+                  <i className="fa-solid fa-microchip text-5xl bg-clip-text text-transparent bg-gradient-to-br from-blue-500 to-indigo-600"></i>
+                </div>
+                
+                <h3 className="text-3xl font-black text-slate-800 dark:text-slate-100 tracking-tight mb-3">System Standby</h3>
+                <p className="text-slate-500 dark:text-slate-400 font-medium max-w-sm mx-auto leading-relaxed">
+                  Provide proposal details, clinical history, or upload a full PDF dossier to initiate the AI underwriting sequence.
+                </p>
+                
+                {!showHistory && history.length > 0 && (
+                  <button 
+                    onClick={() => setShowHistory(true)}
+                    className="mt-8 px-6 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-full text-sm font-bold text-slate-600 dark:text-slate-300 hover:text-blue-600 dark:hover:text-blue-400 hover:border-blue-200 dark:hover:border-blue-800 transition-all shadow-sm hover:shadow flex items-center gap-2 mx-auto"
+                  >
+                    <i className="fa-solid fa-clock-rotate-left"></i> Load Previous Assessment
+                  </button>
+                )}
               </div>
-              <h3 className="text-xl font-semibold text-slate-700 dark:text-slate-200">Ready for Assessment</h3>
-              <p className="text-slate-500 dark:text-slate-400 mt-2">Submit proposal and medical data or upload a PDF to generate the automated underwriting report.</p>
-              {!showHistory && history.length > 0 && (
-                <button 
-                  onClick={() => setShowHistory(true)}
-                  className="mt-6 text-sm font-semibold text-blue-600 dark:text-blue-400 hover:text-blue-700 underline underline-offset-4"
-                >
-                  View Past Cases
-                </button>
-              )}
             </div>
           )}
         </div>
       </main>
 
-      <footer className="py-6 text-center text-slate-400 text-sm border-t border-slate-100 dark:border-slate-800 bg-white dark:bg-slate-900 no-print">
+      <footer className="py-6 text-center text-slate-400 text-xs font-bold uppercase tracking-widest border-t border-slate-100 dark:border-slate-800/50 bg-white/50 dark:bg-slate-900/50 backdrop-blur-md no-print relative z-10">
         PGDM – IBM: Life Insurance Underwriting Tool &copy; {new Date().getFullYear()}
       </footer>
     </div>
