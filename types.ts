@@ -59,4 +59,50 @@ export interface HistoryItem {
   report: UnderwritingResult;
   proposalText: string;
   medicalText: string;
+  financialText?: string;
+  transactions?: Transaction[];
+  scenarios?: MedicalParameter[];
+  fraudFlags?: FraudFlag[];
+}
+
+export type FraudSeverity = 'Low' | 'Medium' | 'High' | 'Critical';
+
+export interface FraudFlag {
+  id: string;
+  signature: string;
+  severity: FraudSeverity;
+  reason: string;
+  evidence: string;
+  action: string;
+}
+
+// --- UPDATED FOR INVESTIGATION MODE ---
+export interface Transaction {
+  id: string;
+  date: string;
+  amount: number;
+  description: string;
+  flagged: boolean;
+  status?: 'pending' | 'safe' | 'escalated'; // Added to handle UI action states
+  details?: {
+    comparison: string;
+    highlightedText: string[];
+    fraudSignature?: string; // Added to match specific fraud patterns
+  };
+}
+
+// --- UPDATED FOR SCENARIO ANALYSIS DASHBOARD ---
+export interface MedicalParameter {
+  id: string; // Added for stable React mapping
+  name: string;
+  category: 'Vitals' | 'Lifestyle' | 'Medical History' | string; // Added for structured data
+  current: string;
+  adjusted: string;
+  toggle: boolean;
+  impactDelta: number; // Added to show exact score impact (e.g., -15 or +10)
+}
+
+export interface RiskScore {
+  current: number;
+  adjusted: number;
 }

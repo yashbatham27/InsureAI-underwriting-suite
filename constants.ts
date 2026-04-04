@@ -80,3 +80,26 @@ export const HEALTH_CLASS_FACTORS = [
 
 export const MAPPED_CONDITIONS = Object.keys(HEALTH_EMR);
 export const MAPPED_OCCUPATIONS = Object.keys(OCCUPATION_EXTRA_PER_MILLE);
+
+export const FRAUD_SIGNATURES = {
+  INCOME_BOOST: {
+    name: "Income Boost Scam Pattern v2.3",
+    pattern: "Multiple heavy deposits right before application date.",
+    severity: "Critical" as const
+  },
+  IDENTITY_SQUAT: {
+    name: "Identity Mismatch v1.0",
+    pattern: "DOB or Name mismatch between Aadhaar and Proposal Form.",
+    severity: "High" as const
+  },
+  MEDICAL_FRAUD: {
+    name: "Medical History Fabrication v1.5",
+    pattern: "Inconsistent medical records across multiple sources.",
+    severity: "Medium" as const
+  },
+  POLICY_STACKING: {
+    name: "Policy Stacking Indicator v3.1",
+    pattern: "Multiple policies applied within short timeframe.",
+    severity: "Low" as const
+  }
+};
